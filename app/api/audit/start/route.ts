@@ -30,6 +30,24 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
 }
 
+function resolveCallbackBaseUrl(request: NextRequest): string {
+  const configuredBaseUrl = process.env.QSTASH_CALLBACK_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    return new URL(configuredBaseUrl).origin;
+  }
+
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+    const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
+    if (forwardedHost) {
+      return `${forwardedProto}://${forwardedHost}`;
+    }
+    throw new Error('Unable to determine callback URL. Set QSTASH_CALLBACK_BASE_URL to your public app URL.');
+  }
+}
+
 async function runSingleAuditJobLocally(jobId: string, url: string): Promise<void> {
   try {
     await updateStatus(jobId, 'auditing', url);
@@ -60,8 +78,7 @@ export async function POST(request: NextRequest) {
     progress.pageResults = [{ url: normalizedUrl, status: 'pending' }];
     await updateStatus(jobId, 'discovering', 'Queued for background processing');
 
-    const requestOrigin = new URL(request.url).origin;
-    const callbackBaseUrl = process.env.QSTASH_CALLBACK_BASE_URL || requestOrigin;
+    const callbackBaseUrl = resolveCallbackBaseUrl(request);
     const queueEndpoint = `${callbackBaseUrl.replace(/\/$/, '')}/api/audit/queue`;
     const queueHost = new URL(queueEndpoint).hostname;
 
