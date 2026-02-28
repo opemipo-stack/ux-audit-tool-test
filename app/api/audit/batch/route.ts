@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getProgress, updateStatus, updatePageProgress, saveFinalResult } from '../../../../lib/progressTracker';
+import { getProgress, updateStatus, updatePageProgress, saveFinalResult, updateAutoRetryRounds } from '../../../../lib/progressTracker';
 import { processBatches } from '../../../../lib/batchProcessor';
 import { aggregateAuditResults, sortPagesBySeverity } from '../../../../lib/batchAuditor';
 import { CONFIG } from '../../../../lib/config';
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
                 batchSize: BATCH_SIZE, // 1 page at a time
                 delayBetweenBatches: 0, // No delay needed for single-page processing
                 delayBetweenRequests: CONFIG.batch.delayBetweenRequests, // 500ms delay (original)
-                maxRetries: CONFIG.batch.maxRetries, // Single retry
+                maxRetries: CONFIG.batch.maxRetries, // 2 attempts total = 1 immediate retry
                 timeoutPerPage: CONFIG.batch.timeoutPerPage // 20s per page (original, fits Netlify 26s limit)
             });
             console.log(`[Batch] ✅ Batch processed: ${batchResult.successful.length} successful, ${batchResult.failed.length} failed`);
@@ -249,6 +249,50 @@ export async function POST(request: NextRequest) {
         } else {
             // No more pages, we are done
             console.log(`[Batch] ✅ Final batch completed.`);
+
+            const finalProgress = await getProgress(jobId);
+            const failedPageResults = finalProgress
+                ? finalProgress.pageResults.filter(p => p.status === 'failed')
+                : [];
+            const autoRetryRoundsCompleted = finalProgress?.autoRetryRoundsCompleted || 0;
+            const maxAutoRetryRounds = CONFIG.batch.autoRetryRounds || 0;
+
+            if (failedPageResults.length > 0 && autoRetryRoundsCompleted < maxAutoRetryRounds) {
+                const nextAutoRetryRound = autoRetryRoundsCompleted + 1;
+                const retryUrls = failedPageResults.map(p => p.url);
+
+                console.log(`[Batch] 🔄 Auto-retrying ${retryUrls.length} failed pages (round ${nextAutoRetryRound}/${maxAutoRetryRounds})`);
+
+                await Promise.all(
+                    retryUrls.map(url => updatePageProgress(jobId, url, 'pending'))
+                );
+                await updateAutoRetryRounds(jobId, nextAutoRetryRound);
+                await updateStatus(jobId, 'auditing', `Auto-retrying ${retryUrls.length} failed pages (${nextAutoRetryRound}/${maxAutoRetryRounds})...`);
+
+                const origin = new URL(request.url).origin;
+                const retryBatchUrl = `${origin}/api/audit/batch`;
+
+                fetch(retryBatchUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jobId })
+                }).then((res) => {
+                    if (res.ok) {
+                        console.log(`[Batch] ✅ Auto-retry batch triggered successfully`);
+                    } else {
+                        console.error(`[Batch] ❌ Auto-retry batch returned ${res.status}`);
+                    }
+                }).catch((err: any) => {
+                    console.error(`[Batch] ❌ Auto-retry batch trigger failed: ${err.message}`);
+                });
+
+                return NextResponse.json({
+                    status: 'auto-retrying',
+                    retriedPages: retryUrls.length,
+                    autoRetryRound: nextAutoRetryRound,
+                    maxAutoRetryRounds
+                });
+            }
 
             // Trigger final aggregation
             try {

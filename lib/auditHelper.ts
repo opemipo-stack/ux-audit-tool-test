@@ -142,7 +142,8 @@ export async function launchBrowser() {
  */
 export async function auditSinglePage(url: string, abortSignal?: AbortSignal, browserInstance?: any): Promise<AuditResult> {
   let browser: any = browserInstance;
-  let isLocalBrowser = !browserInstance;
+  const isLocalBrowser = !browserInstance;
+  let page: any = null;
 
   try {
     // Check if aborted before starting
@@ -224,7 +225,7 @@ export async function auditSinglePage(url: string, abortSignal?: AbortSignal, br
       throw new Error(`Audit aborted before page creation: ${abortSignal.reason || 'Signal aborted'}`);
     }
 
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
 
     // Check if aborted before navigation
@@ -406,6 +407,15 @@ export async function auditSinglePage(url: string, abortSignal?: AbortSignal, br
       console.log(`  ✅ Screenshot captured`);
     } catch (screenshotError: any) {
       console.warn(`  ⚠️ Screenshot failed: ${screenshotError.message}. Continuing without screenshot.`);
+    }
+
+    try {
+      if (page) {
+        await page.close();
+        page = null;
+      }
+    } catch (pageCloseError) {
+      console.warn(`  ⚠️ Error closing page after capture:`, pageCloseError);
     }
 
     if (isLocalBrowser) {
@@ -743,7 +753,7 @@ Focus on the most impactful issues. Return 8-15 findings total.`;
           };
 
           // Apply JSON repair
-          let cleanedJSON = repairJSON(jsonString);
+          const cleanedJSON = repairJSON(jsonString);
 
           try {
             findings = JSON.parse(cleanedJSON);
@@ -934,8 +944,18 @@ Focus on the most impactful issues. Return 8-15 findings total.`;
       screenshot: screenshot ? `data:image/png;base64,${screenshot}` : undefined,
     };
   } catch (error: any) {
-    // Ensure browser is closed even on error
-    if (browser) {
+    // Ensure the page is closed even on error
+    if (page) {
+      try {
+        await page.close();
+        console.log(`  ✅ Page closed after error`);
+      } catch (closeError) {
+        console.error(`  ⚠️ Error closing page:`, closeError);
+      }
+    }
+
+    // Only close the browser if this function launched it.
+    if (isLocalBrowser && browser) {
       try {
         await browser.close();
         console.log(`  ✅ Browser closed after error`);
@@ -956,6 +976,4 @@ Focus on the most impactful issues. Return 8-15 findings total.`;
     throw new Error(`Audit failed for ${url}: ${error.message}`);
   }
 }
-
-
 

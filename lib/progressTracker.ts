@@ -25,6 +25,7 @@ export interface AuditProgress {
   // Enhanced timing data for better estimation
   averagePageDuration?: number; // Average time per page in milliseconds
   recentPageDurations?: number[]; // Last 5 page durations for trend analysis
+  autoRetryRoundsCompleted?: number;
 }
 
 // In-memory storage for progress (in production, use Redis or database)
@@ -734,6 +735,34 @@ export async function updateStatus(jobId: string, status: AuditProgress['status'
       console.warn(`⚠️ KV not available - status update saved in memory only for ${jobId}`);
     }
   }
+}
+
+/**
+ * Updates automatic retry metadata for a job
+ */
+export async function updateAutoRetryRounds(jobId: string, roundsCompleted: number): Promise<void> {
+  await initializeKv();
+
+  let progress = progressStore.get(jobId);
+  if (!progress && useKv && kv) {
+    try {
+      const kvData = await kv.get(`audit:progress:${jobId}`) as string | null;
+      if (kvData) {
+        progress = JSON.parse(kvData) as AuditProgress;
+      }
+    } catch (e) {
+      console.error('⚠️ Failed to get progress from KV in updateAutoRetryRounds:', e);
+    }
+  }
+
+  if (!progress) {
+    console.warn(`⚠️ Progress not found for jobId ${jobId} in updateAutoRetryRounds`);
+    return;
+  }
+
+  progress.autoRetryRoundsCompleted = roundsCompleted;
+  progressStore.set(jobId, progress);
+  await saveProgressToKv(jobId, progress);
 }
 
 /**

@@ -35,7 +35,8 @@ export const CONFIG = {
     timeoutPerPage: isProduction && isNetlify ? 22000 : 20000, // 22s for Netlify (balanced), 20s elsewhere
     delayBetweenRequests: 500, // 500ms delay (original)
     aiAnalysisTimeout: isProduction && isNetlify ? 15000 : 20000, // 15s for Netlify (fits in 22s page timeout), 20s elsewhere
-    maxRetries: 1, // Single retry
+    maxRetries: 2, // 2 attempts total = 1 immediate retry
+    autoRetryRounds: 1, // Retry failed pages once automatically before manual retry remains available
   },
   logging: {
     level: isProduction ? 'info' : 'debug',
@@ -46,5 +47,4 @@ export const CONFIG = {
     isProduction,
   },
 };
-
 
