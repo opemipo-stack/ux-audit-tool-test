@@ -26,6 +26,7 @@ export interface AuditProgress {
   averagePageDuration?: number; // Average time per page in milliseconds
   recentPageDurations?: number[]; // Last 5 page durations for trend analysis
   autoRetryRoundsCompleted?: number;
+  homepageRetryQueued?: boolean;
 }
 
 // In-memory storage for progress (in production, use Redis or database)
@@ -761,6 +762,34 @@ export async function updateAutoRetryRounds(jobId: string, roundsCompleted: numb
   }
 
   progress.autoRetryRoundsCompleted = roundsCompleted;
+  progressStore.set(jobId, progress);
+  await saveProgressToKv(jobId, progress);
+}
+
+/**
+ * Marks that the homepage has already been requeued once after an initial failure.
+ */
+export async function markHomepageRetryQueued(jobId: string): Promise<void> {
+  await initializeKv();
+
+  let progress = progressStore.get(jobId);
+  if (!progress && useKv && kv) {
+    try {
+      const kvData = await kv.get(`audit:progress:${jobId}`) as string | null;
+      if (kvData) {
+        progress = JSON.parse(kvData) as AuditProgress;
+      }
+    } catch (e) {
+      console.error('⚠️ Failed to get progress from KV in markHomepageRetryQueued:', e);
+    }
+  }
+
+  if (!progress) {
+    console.warn(`⚠️ Progress not found for jobId ${jobId} in markHomepageRetryQueued`);
+    return;
+  }
+
+  progress.homepageRetryQueued = true;
   progressStore.set(jobId, progress);
   await saveProgressToKv(jobId, progress);
 }

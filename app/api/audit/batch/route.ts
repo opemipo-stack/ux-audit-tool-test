@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getProgress, updateStatus, updatePageProgress, saveFinalResult, updateAutoRetryRounds } from '../../../../lib/progressTracker';
+import { getProgress, updateStatus, updatePageProgress, saveFinalResult, updateAutoRetryRounds, markHomepageRetryQueued } from '../../../../lib/progressTracker';
 import { processBatches } from '../../../../lib/batchProcessor';
 import { aggregateAuditResults, sortPagesBySeverity } from '../../../../lib/batchAuditor';
 import { CONFIG } from '../../../../lib/config';
@@ -162,6 +162,23 @@ export async function POST(request: NextRequest) {
             // Don't return error - let the trigger logic handle it
         }
         
+        // If the homepage failed first, give it one extra attempt after another page completes.
+        if (updatedProgress && updatedProgress.pageResults.length > 1) {
+            const homepage = updatedProgress.pageResults[0];
+            const homepageIsFailed = homepage?.status === 'failed';
+            const homepageRetryQueued = updatedProgress.homepageRetryQueued === true;
+            const nonHomepageCompleted = updatedProgress.pageResults
+                .slice(1)
+                .some(p => p.status === 'completed');
+
+            if (homepageIsFailed && !homepageRetryQueued && nonHomepageCompleted) {
+                console.log(`[Batch] 🔄 Requeueing homepage ${homepage.url} for one warm retry after another page completed`);
+                await updatePageProgress(jobId, homepage.url, 'pending');
+                await markHomepageRetryQueued(jobId);
+                updatedProgress = await getProgress(jobId) || updatedProgress;
+            }
+        }
+
         // Remaining pages = not completed and not failed (pending + processing)
         // Include 'processing' so stuck pages get retried - never skip other pages
         let remainingPendingPages: string[] = [];
