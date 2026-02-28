@@ -140,10 +140,20 @@ export async function launchBrowser() {
 /**
  * Audits a single page
  */
-export async function auditSinglePage(url: string, abortSignal?: AbortSignal, browserInstance?: any): Promise<AuditResult> {
+export interface AuditSinglePageOptions {
+  captureScreenshot?: boolean;
+}
+
+export async function auditSinglePage(
+  url: string,
+  abortSignal?: AbortSignal,
+  browserInstance?: any,
+  options: AuditSinglePageOptions = {}
+): Promise<AuditResult> {
   let browser: any = browserInstance;
   const isLocalBrowser = !browserInstance;
   let page: any = null;
+  const shouldCaptureScreenshot = options.captureScreenshot !== false;
 
   try {
     // Check if aborted before starting
@@ -396,17 +406,21 @@ export async function auditSinglePage(url: string, abortSignal?: AbortSignal, br
 
     // Take screenshot with timeout; use placeholder if screenshot fails
     let screenshot: string | Buffer | null = null;
-    console.log(`  📸 Taking screenshot...`);
-    const SCREENSHOT_TIMEOUT = 10000; // 10 seconds max for screenshot
-    try {
-      const screenshotPromise = page.screenshot({ encoding: 'base64', fullPage: false });
-      const screenshotTimeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Screenshot timeout after ${SCREENSHOT_TIMEOUT}ms`)), SCREENSHOT_TIMEOUT)
-      );
-      screenshot = await Promise.race([screenshotPromise, screenshotTimeoutPromise]) as string | Buffer;
-      console.log(`  ✅ Screenshot captured`);
-    } catch (screenshotError: any) {
-      console.warn(`  ⚠️ Screenshot failed: ${screenshotError.message}. Continuing without screenshot.`);
+    if (shouldCaptureScreenshot) {
+      console.log(`  📸 Taking screenshot...`);
+      const SCREENSHOT_TIMEOUT = 10000; // 10 seconds max for screenshot
+      try {
+        const screenshotPromise = page.screenshot({ encoding: 'base64', fullPage: false });
+        const screenshotTimeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Screenshot timeout after ${SCREENSHOT_TIMEOUT}ms`)), SCREENSHOT_TIMEOUT)
+        );
+        screenshot = await Promise.race([screenshotPromise, screenshotTimeoutPromise]) as string | Buffer;
+        console.log(`  ✅ Screenshot captured`);
+      } catch (screenshotError: any) {
+        console.warn(`  ⚠️ Screenshot failed: ${screenshotError.message}. Continuing without screenshot.`);
+      }
+    } else {
+      console.log(`  ⏭️ Skipping screenshot capture for this audit`);
     }
 
     try {
@@ -976,4 +990,3 @@ Focus on the most impactful issues. Return 8-15 findings total.`;
     throw new Error(`Audit failed for ${url}: ${error.message}`);
   }
 }
-

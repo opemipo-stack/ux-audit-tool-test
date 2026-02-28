@@ -4,7 +4,7 @@
  */
 
 import { AuditResult } from '../types/audit';
-import { auditSinglePage } from './auditHelper';
+import { auditSinglePage, AuditSinglePageOptions } from './auditHelper';
 import { updatePageProgress, updateStatus } from './progressTracker';
 import { CONFIG } from './config';
 
@@ -132,7 +132,8 @@ async function auditSinglePageWithRetry(
   jobId: string,
   config: BatchConfig,
   abortSignal?: AbortSignal,
-  browserInstance?: any
+  browserInstance?: any,
+  pageOptions?: AuditSinglePageOptions
 ): Promise<AuditResult> {
   console.log(`[auditSinglePageWithRetry] 🚀 Starting audit for ${url}`);
   console.log(`[auditSinglePageWithRetry] Job ID: ${jobId}`);
@@ -182,7 +183,7 @@ async function auditSinglePageWithRetry(
 
         // Race between audit and timeout
         const result = await Promise.race([
-          auditSinglePage(url, signal, browserInstance),
+          auditSinglePage(url, signal, browserInstance, pageOptions),
           timeoutPromise
         ]);
 
@@ -331,6 +332,10 @@ export async function processBatches(
   }
 
   const overallStartTime = Date.now();
+  const pageOptions: AuditSinglePageOptions = {
+    // Full-site batch audits on Netlify are time-constrained and do not persist screenshots anyway.
+    captureScreenshot: !CONFIG.platform.isNetlify,
+  };
 
   // Add heartbeat to verify batch processing is running
   const heartbeatInterval = setInterval(() => {
@@ -472,7 +477,7 @@ export async function processBatches(
 
           // Pass the shared browser instance
           // We need to pass it to auditSinglePageWithRetry, which needs to pass it to auditSinglePage
-          const auditPromise = auditSinglePageWithRetry(pageUrl, jobId, config, abortSignal, browser).catch((error: any) => {
+          const auditPromise = auditSinglePageWithRetry(pageUrl, jobId, config, abortSignal, browser, pageOptions).catch((error: any) => {
             // CRITICAL: Catch errors early and ensure they have proper context
             if (error.message?.includes('aborted') || abortSignal.aborted) {
               const reason = abortSignal.reason || error.message || 'Signal aborted without reason';
@@ -749,4 +754,3 @@ export async function processBatches(
 
   return { successful, failed };
 }
-
