@@ -142,6 +142,7 @@ export async function launchBrowser() {
  */
 export interface AuditSinglePageOptions {
   captureScreenshot?: boolean;
+  lightweightAnalysis?: boolean;
 }
 
 export async function auditSinglePage(
@@ -154,6 +155,7 @@ export async function auditSinglePage(
   const isLocalBrowser = !browserInstance;
   let page: any = null;
   const shouldCaptureScreenshot = options.captureScreenshot !== false;
+  const useLightweightAnalysis = options.lightweightAnalysis === true;
 
   try {
     // Check if aborted before starting
@@ -265,8 +267,8 @@ export async function auditSinglePage(
           timeout: DOM_CONTENT_TIMEOUT
         });
         clearTimeout(timeoutId);
-        // Wait a short time for critical resources (reduced for speed)
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds for critical resources
+        // Wait a short time for critical resources.
+        await new Promise(resolve => setTimeout(resolve, useLightweightAnalysis ? 1000 : 2000));
         console.log(`  ✅ Page loaded successfully (domcontentloaded)`);
       } catch (domError: any) {
         clearTimeout(timeoutId);
@@ -441,6 +443,9 @@ export async function auditSinglePage(
 
     // Analyze with AI
     console.log(`  🤖 Analyzing with AI...`);
+    const htmlSampleLimit = useLightweightAnalysis ? 4000 : 10000;
+    const requestedFindingRange = useLightweightAnalysis ? '6-10' : '8-15';
+    const maxTokens = useLightweightAnalysis ? 1800 : 4000;
     const analysisPrompt = `You are a UX audit expert. Analyze the following website data and identify UX issues.
 
 Website URL: ${targetUrl.toString()}
@@ -454,8 +459,8 @@ Page Structure:
 - Buttons: ${pageData.buttons.length} total
 - Forms: ${pageData.forms.length} total
 
-HTML Sample (first 50k chars):
-${pageData.html.substring(0, 10000)}
+HTML Sample (truncated to ${htmlSampleLimit} chars):
+${pageData.html.substring(0, htmlSampleLimit)}
 
 Analyze this website and identify UX issues in these categories:
 1. Accessibility (WCAG compliance, alt text, ARIA labels, keyboard navigation)
@@ -493,7 +498,7 @@ Format:
   }
 ]
 
-Focus on the most impactful issues. Return 8-15 findings total.`;
+Focus on the most impactful issues. Return ${requestedFindingRange} findings total.`;
 
     // Use environment variable if set, otherwise use fallback list
     const preferredModel = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL;
@@ -527,10 +532,9 @@ Focus on the most impactful issues. Return 8-15 findings total.`;
         console.log(`  🤖 Trying model: ${modelName}`);
 
         // Wrap AI API call in timeout to prevent hanging
-        // Keep original max_tokens for full analysis quality
         const aiPromise = anthropic.messages.create({
           model: modelName,
-          max_tokens: 4000, // Original max_tokens for full analysis
+          max_tokens: maxTokens,
           messages: [{
             role: 'user',
             content: analysisPrompt,

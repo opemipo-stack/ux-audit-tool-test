@@ -335,6 +335,7 @@ export async function processBatches(
   const pageOptions: AuditSinglePageOptions = {
     // Full-site batch audits on Netlify are time-constrained and do not persist screenshots anyway.
     captureScreenshot: !CONFIG.platform.isNetlify,
+    lightweightAnalysis: CONFIG.platform.isNetlify,
   };
 
   // Add heartbeat to verify batch processing is running
