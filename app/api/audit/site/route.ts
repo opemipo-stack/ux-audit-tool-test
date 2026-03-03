@@ -40,11 +40,6 @@ export async function POST(request: NextRequest) {
     // Generate job ID if not provided by queued starter
     const jobId = incomingJobId || generateUUID();
 
-    // Capture origin for batch processing url construction
-    // This handles non-standard ports (e.g. 3001) automatically
-    const origin = new URL(request.url).origin;
-    console.log(`[Batch] Determined API origin: ${origin}`);
-
     // Initialize progress tracker immediately (before async operation)
     // This ensures the job exists for polling even before discovery starts
     const initialPageCount = retryUrls && Array.isArray(retryUrls) && retryUrls.length > 0 
@@ -192,6 +187,25 @@ export async function POST(request: NextRequest) {
           pageUrls = discoveredPages.map(page => page.url);
           actualPageCount = Math.min(pageUrls.length, maxPages);
 
+          // On Netlify, the homepage is often the coldest request on the target origin.
+          // Audit another discovered page first, then come back to the homepage once the site is warm.
+          if (process.env.NETLIFY && pageUrls.length > 1) {
+            const homepageIndex = pageUrls.findIndex((pageUrl) => {
+              try {
+                const candidate = new URL(pageUrl);
+                return candidate.origin === targetUrl.origin && candidate.pathname === '/';
+              } catch {
+                return false;
+              }
+            });
+
+            if (homepageIndex === 0) {
+              const [homepageUrl] = pageUrls.splice(homepageIndex, 1);
+              pageUrls.push(homepageUrl);
+              console.log(`[Background] 🔄 Moved homepage to the end of the queue for warm-start stability: ${homepageUrl}`);
+            }
+          }
+
           console.log(`✅ Discovered ${pageUrls.length} pages (requested: ${maxPages}, will audit: ${actualPageCount})`);
           
           // CRITICAL: Log if we didn't discover the requested number of pages
@@ -319,7 +333,7 @@ export async function POST(request: NextRequest) {
         // SiteAuditProgress STUCK_THRESHOLD (trigger batch after no progress for 28s).
         console.log(`[Background] 🔄 Handing off to batch processor for ${actualPageCount} pages...`);
 
-        const batchApiUrl = `${origin}/api/audit/batch`;
+        const batchApiUrl = `${new URL(request.url).origin}/api/audit/batch`;
         console.log(`[Background] 🔗 Triggering first batch at: ${batchApiUrl} (fire-and-forget)`);
 
         fetch(batchApiUrl, {

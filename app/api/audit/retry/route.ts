@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProgress, updateStatus, updatePageProgress } from '../../../../lib/progressTracker';
+import { enqueueInternalJsonPost } from '../../../../lib/qstash';
 
 export const runtime = 'nodejs';
 
@@ -25,7 +26,6 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Verify retry URLs are actually failed pages in this job
-    const retryUrlsSet = new Set(retryUrls);
     const existingFailedUrls = progress.pageResults
       .filter(p => p.status === 'failed')
       .map(p => p.url);
@@ -74,63 +74,17 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // 4. Update job status to 'auditing' to resume processing
-    // CRITICAL: Don't await - return response immediately, then trigger batch in background
-    // This prevents retry API from timing out in Netlify
-    updateStatus(jobId, 'auditing', `Retrying ${resetCount} failed pages...`).catch(e => {
-      console.error(`[Retry] ⚠️ Failed to update status: ${e.message}`);
+    // 4. Update job status to 'auditing' before re-queueing the batch worker
+    await updateStatus(jobId, 'auditing', `Retrying ${resetCount} failed pages...`);
+
+    // 5. Trigger batch processing for the retry pages via QStash when available
+    const queuedBatch = await enqueueInternalJsonPost(request, {
+      path: '/api/audit/batch',
+      body: { jobId },
+      label: 'full-site-manual-retry',
     });
+    console.log(`[Retry] ✅ Batch processing queued via ${queuedBatch.mode}: ${queuedBatch.url}`);
 
-    // 5. Trigger batch processing for the retry pages (fire-and-forget)
-    // CRITICAL: Return response immediately, trigger batch asynchronously
-    // This ensures retry API completes quickly and doesn't timeout
-    const origin = new URL(request.url).origin;
-    const batchApiUrl = `${origin}/api/audit/batch`;
-    
-    console.log(`[Retry] 🔗 Triggering batch processing at: ${batchApiUrl} (fire-and-forget)`);
-
-    // Fire-and-forget: Don't await - return immediately
-    // The batch API will handle processing, and progress polling will show updates
-    fetch(batchApiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId })
-    }).then((res) => {
-      if (res.ok) {
-        console.log(`[Retry] ✅ Batch processing triggered successfully`);
-      } else {
-        console.error(`[Retry] ⚠️ Batch trigger returned ${res.status}`);
-        // Retry once after 1s (runs in background)
-        setTimeout(() => {
-          fetch(batchApiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobId })
-          }).then((r) => {
-            console.log(`[Retry] 🔄 Retry trigger: ${r.ok ? 'ok' : r.status}`);
-          }).catch((e: any) => {
-            console.error(`[Retry] ❌ Retry trigger failed: ${e.message}`);
-          });
-        }, 1000);
-      }
-    }).catch((e: any) => {
-      console.error(`[Retry] ❌ Failed to trigger batch processing: ${e.message}`);
-      // Retry once after 1s (runs in background)
-      setTimeout(() => {
-        fetch(batchApiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId })
-        }).then((r) => {
-          console.log(`[Retry] 🔄 Retry trigger: ${r.ok ? 'ok' : r.status}`);
-        }).catch((err: any) => {
-          console.error(`[Retry] ❌ Retry trigger failed: ${err.message}`);
-        });
-      }, 1000);
-    });
-
-    // Return immediately - batch processing will continue in background
-    // Progress polling will show updates as pages are processed
     return NextResponse.json({
       success: true,
       jobId,

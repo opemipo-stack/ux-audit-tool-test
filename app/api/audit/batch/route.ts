@@ -3,6 +3,7 @@ import { getProgress, updateStatus, updatePageProgress, saveFinalResult, updateA
 import { processBatches } from '../../../../lib/batchProcessor';
 import { aggregateAuditResults, sortPagesBySeverity } from '../../../../lib/batchAuditor';
 import { CONFIG } from '../../../../lib/config';
+import { enqueueInternalJsonPost } from '../../../../lib/qstash';
 
 // Vercel serverless function configuration
 // Serverless function configuration
@@ -239,7 +240,6 @@ export async function POST(request: NextRequest) {
             const origin = new URL(request.url).origin;
             const nextBatchUrl = `${origin}/api/audit/batch`;
 
-            // Fire-and-forget: do NOT await - stay under 26s so next batch actually runs
             fetch(nextBatchUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -252,7 +252,6 @@ export async function POST(request: NextRequest) {
                 }
             }).catch((err: any) => {
                 console.error(`[Batch] ❌ Next batch trigger failed: ${err.message}`);
-                // Retry once after 1s (runs in background)
                 setTimeout(() => {
                     fetch(nextBatchUrl, {
                         method: 'POST',
@@ -280,28 +279,14 @@ export async function POST(request: NextRequest) {
 
                 console.log(`[Batch] 🔄 Auto-retrying ${retryUrls.length} failed pages (round ${nextAutoRetryRound}/${maxAutoRetryRounds})`);
 
-                await Promise.all(
-                    retryUrls.map(url => updatePageProgress(jobId, url, 'pending'))
-                );
                 await updateAutoRetryRounds(jobId, nextAutoRetryRound);
-                await updateStatus(jobId, 'auditing', `Auto-retrying ${retryUrls.length} failed pages (${nextAutoRetryRound}/${maxAutoRetryRounds})...`);
 
-                const origin = new URL(request.url).origin;
-                const retryBatchUrl = `${origin}/api/audit/batch`;
-
-                fetch(retryBatchUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ jobId })
-                }).then((res) => {
-                    if (res.ok) {
-                        console.log(`[Batch] ✅ Auto-retry batch triggered successfully`);
-                    } else {
-                        console.error(`[Batch] ❌ Auto-retry batch returned ${res.status}`);
-                    }
-                }).catch((err: any) => {
-                    console.error(`[Batch] ❌ Auto-retry batch trigger failed: ${err.message}`);
+                const queuedRetry = await enqueueInternalJsonPost(request, {
+                    path: '/api/audit/retry',
+                    body: { jobId, retryUrls },
+                    label: 'full-site-auto-retry',
                 });
+                console.log(`[Batch] ✅ Auto-retry queued via ${queuedRetry.mode}: ${queuedRetry.url}`);
 
                 return NextResponse.json({
                     status: 'auto-retrying',
@@ -411,7 +396,6 @@ export async function POST(request: NextRequest) {
                         const origin = new URL(request.url).origin;
                         const nextBatchUrl = `${origin}/api/audit/batch`;
                         
-                        // Non-blocking trigger - don't await
                         setTimeout(async () => {
                             try {
                                 await fetch(nextBatchUrl, {
