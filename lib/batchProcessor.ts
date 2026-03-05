@@ -22,6 +22,8 @@ export interface BatchConfig {
   maxRetries: number;
   timeoutPerPage: number;
   forceFallbackOnError?: boolean;
+  firstPageHardening?: boolean;
+  firstPageUrl?: string;
 }
 
 // Configuration for one-page-at-a-time processing
@@ -33,6 +35,7 @@ const DEFAULT_CONFIG: BatchConfig = {
   maxRetries: CONFIG.batch.maxRetries, // Single retry
   timeoutPerPage: CONFIG.batch.timeoutPerPage, // 20s per page (original, fits in Netlify 26s limit)
   forceFallbackOnError: false,
+  firstPageHardening: false,
 };
 
 /**
@@ -481,7 +484,26 @@ export async function processBatches(
 
           // Pass the shared browser instance
           // We need to pass it to auditSinglePageWithRetry, which needs to pass it to auditSinglePage
-          const auditPromise = auditSinglePageWithRetry(pageUrl, jobId, config, abortSignal, browser, pageOptions).catch((error: any) => {
+          const shouldHardenFirstPage =
+            config.firstPageHardening === true &&
+            typeof config.firstPageUrl === 'string' &&
+            config.firstPageUrl === pageUrl;
+
+          const effectivePageOptions: AuditSinglePageOptions = shouldHardenFirstPage
+            ? {
+                ...pageOptions,
+                captureScreenshot: false,
+                lightweightAnalysis: true,
+                preWarmupBeforeAudit: true,
+                ultraLightMode: true,
+              }
+            : pageOptions;
+
+          if (shouldHardenFirstPage) {
+            console.log(`[processBatches] 🔧 First-page hardening enabled for ${pageUrl} (pre-warm + ultra-light profile)`);
+          }
+
+          const auditPromise = auditSinglePageWithRetry(pageUrl, jobId, config, abortSignal, browser, effectivePageOptions).catch((error: any) => {
             // CRITICAL: Catch errors early and ensure they have proper context
             if (error.message?.includes('aborted') || abortSignal.aborted) {
               const reason = abortSignal.reason || error.message || 'Signal aborted without reason';

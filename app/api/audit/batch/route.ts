@@ -106,9 +106,14 @@ export async function POST(request: NextRequest) {
         const currentBatchUrls = verifiedPendingPages.slice(0, BATCH_SIZE);
         const totalBatches = Math.ceil(verifiedPendingPages.length / BATCH_SIZE);
         const currentBatchNumber = Math.ceil((freshProgress.totalPages - verifiedPendingPages.length) / BATCH_SIZE) + 1;
+        const isFirstBatch = currentBatchNumber === 1;
+        const firstBatchUrl = currentBatchUrls[0];
 
         console.log(`[Batch] 📦 Batch ${currentBatchNumber}/${totalBatches}: Processing ${currentBatchUrls.length} pages`);
         console.log(`[Batch]    URLs: ${currentBatchUrls.join(', ')}`);
+        if (isFirstBatch && firstBatchUrl) {
+            console.log(`[Batch] 🔥 First-batch hardening active for: ${firstBatchUrl}`);
+        }
 
         // 4. Process one page at a time with original timeouts
         // Each page: 20s timeout (includes page load + AI analysis + DB save)
@@ -121,7 +126,9 @@ export async function POST(request: NextRequest) {
                 delayBetweenRequests: CONFIG.batch.delayBetweenRequests, // 500ms delay (original)
                 maxRetries: CONFIG.batch.maxRetries, // 2 attempts total = 1 immediate retry
                 timeoutPerPage: CONFIG.batch.timeoutPerPage, // 20s per page (original, fits Netlify 26s limit)
-                forceFallbackOnError: retryMode
+                forceFallbackOnError: retryMode,
+                firstPageHardening: isFirstBatch,
+                firstPageUrl: isFirstBatch ? firstBatchUrl : undefined,
             });
             console.log(`[Batch] ✅ Batch processed: ${batchResult.successful.length} successful, ${batchResult.failed.length} failed`);
         } catch (err: any) {

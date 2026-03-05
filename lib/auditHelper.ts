@@ -144,6 +144,8 @@ export interface AuditSinglePageOptions {
   captureScreenshot?: boolean;
   lightweightAnalysis?: boolean;
   forceFallbackOnError?: boolean;
+  preWarmupBeforeAudit?: boolean;
+  ultraLightMode?: boolean;
 }
 
 function buildFallbackAuditResult(targetUrl: string, errorMessage: string): AuditResult {
@@ -190,6 +192,8 @@ export async function auditSinglePage(
   const shouldCaptureScreenshot = options.captureScreenshot !== false;
   const useLightweightAnalysis = options.lightweightAnalysis === true;
   const forceFallbackOnError = options.forceFallbackOnError === true;
+  const preWarmupBeforeAudit = options.preWarmupBeforeAudit === true;
+  const useUltraLightMode = options.ultraLightMode === true;
 
   try {
     // Check if aborted before starting
@@ -274,6 +278,24 @@ export async function auditSinglePage(
     page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
 
+    if (preWarmupBeforeAudit) {
+      console.log(`  🔥 Running pre-warmup navigation before full audit`);
+      try {
+        await page.goto(targetUrl.toString(), {
+          waitUntil: 'domcontentloaded',
+          timeout: 5000,
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await page.goto('about:blank', {
+          waitUntil: 'domcontentloaded',
+          timeout: 2000,
+        });
+        console.log(`  ✅ Pre-warmup completed`);
+      } catch (warmupError: any) {
+        console.warn(`  ⚠️ Pre-warmup failed, continuing with normal audit: ${warmupError.message}`);
+      }
+    }
+
     // Check if aborted before navigation
     if (abortSignal?.aborted) {
       if (isLocalBrowser) await browser.close();
@@ -302,7 +324,7 @@ export async function auditSinglePage(
         });
         clearTimeout(timeoutId);
         // Wait a short time for critical resources.
-        await new Promise(resolve => setTimeout(resolve, useLightweightAnalysis ? 1000 : 2000));
+        await new Promise(resolve => setTimeout(resolve, useUltraLightMode ? 400 : (useLightweightAnalysis ? 1000 : 2000)));
         console.log(`  ✅ Page loaded successfully (domcontentloaded)`);
       } catch (domError: any) {
         clearTimeout(timeoutId);
@@ -353,7 +375,7 @@ export async function auditSinglePage(
     // Extract page data with timeout; use fallback if response data fails to load
     console.log(`  📊 Extracting page data...`);
     // Balanced timeout - data extraction happens during page load, so this is a safety net
-    const DATA_EXTRACTION_TIMEOUT = isNetlify ? 10000 : 15000; // 10s for Netlify (balanced), 15s elsewhere
+    const DATA_EXTRACTION_TIMEOUT = useUltraLightMode ? 7000 : (isNetlify ? 10000 : 15000); // 7s ultra-light fallback, 10s Netlify, 15s elsewhere
 
     const minimalPageDataFallback = {
       title: '',
@@ -477,9 +499,9 @@ export async function auditSinglePage(
 
     // Analyze with AI
     console.log(`  🤖 Analyzing with AI...`);
-    const htmlSampleLimit = useLightweightAnalysis ? 4000 : 10000;
-    const requestedFindingRange = useLightweightAnalysis ? '6-10' : '8-15';
-    const maxTokens = useLightweightAnalysis ? 1800 : 4000;
+    const htmlSampleLimit = useUltraLightMode ? 1800 : (useLightweightAnalysis ? 4000 : 10000);
+    const requestedFindingRange = useUltraLightMode ? '4-6' : (useLightweightAnalysis ? '6-10' : '8-15');
+    const maxTokens = useUltraLightMode ? 900 : (useLightweightAnalysis ? 1800 : 4000);
     const analysisPrompt = `You are a UX audit expert. Analyze the following website data and identify UX issues.
 
 Website URL: ${targetUrl.toString()}
@@ -555,7 +577,9 @@ Focus on the most impactful issues. Return ${requestedFindingRange} findings tot
     const rateLimiter = getRateLimiter();
     // AI analysis timeout: 20s (fits within page timeout of 20s)
     // This ensures full processing time while staying within Netlify's 26s limit
-    const AI_ANALYSIS_TIMEOUT = CONFIG.batch.aiAnalysisTimeout;
+    const AI_ANALYSIS_TIMEOUT = useUltraLightMode
+      ? Math.min(CONFIG.batch.aiAnalysisTimeout, 10000)
+      : CONFIG.batch.aiAnalysisTimeout;
     console.log(`  [AI] Timeout: ${AI_ANALYSIS_TIMEOUT}ms`);
 
     for (const modelName of modelNames) {
