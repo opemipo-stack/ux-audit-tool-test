@@ -21,6 +21,7 @@ export interface BatchConfig {
   delayBetweenRequests: number;
   maxRetries: number;
   timeoutPerPage: number;
+  forceFallbackOnError?: boolean;
 }
 
 // Configuration for one-page-at-a-time processing
@@ -31,6 +32,7 @@ const DEFAULT_CONFIG: BatchConfig = {
   delayBetweenRequests: CONFIG.batch.delayBetweenRequests, // 500ms delay (original)
   maxRetries: CONFIG.batch.maxRetries, // Single retry
   timeoutPerPage: CONFIG.batch.timeoutPerPage, // 20s per page (original, fits in Netlify 26s limit)
+  forceFallbackOnError: false,
 };
 
 /**
@@ -336,6 +338,7 @@ export async function processBatches(
     // Full-site batch audits on Netlify are time-constrained and do not persist screenshots anyway.
     captureScreenshot: !CONFIG.platform.isNetlify,
     lightweightAnalysis: CONFIG.platform.isNetlify,
+    forceFallbackOnError: config.forceFallbackOnError === true,
   };
 
   // Add heartbeat to verify batch processing is running

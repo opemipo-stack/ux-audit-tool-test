@@ -6,7 +6,8 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    const { jobId, retryUrls } = await request.json();
+    const { jobId, retryUrls, retryMode } = await request.json();
+    const enableRetryRescueMode = retryMode !== false;
 
     if (!jobId) {
       return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
     // 5. Trigger batch processing for the retry pages via QStash when available
     const queuedBatch = await enqueueInternalJsonPost(request, {
       path: '/api/audit/batch',
-      body: { jobId },
+      body: { jobId, retryMode: enableRetryRescueMode },
       label: 'full-site-manual-retry',
     });
     console.log(`[Retry] ✅ Batch processing queued via ${queuedBatch.mode}: ${queuedBatch.url}`);

@@ -28,8 +28,10 @@ export async function POST(request: NextRequest) {
             console.error(`[Batch] ❌ Missing or invalid jobId in request`);
             return NextResponse.json({ error: 'Job ID is required' }, { status: 400 });
         }
+        const retryMode = requestBody?.retryMode === true;
 
         console.log(`[Batch] 🚀 Processing batch for Job ID: ${jobId} (start: ${new Date().toISOString()})`);
+        console.log(`[Batch] 🔁 Retry mode: ${retryMode ? 'ON (rescue fallback enabled)' : 'OFF'}`);
 
         // 1. Get current progress
         const progressStartTime = Date.now();
@@ -118,7 +120,8 @@ export async function POST(request: NextRequest) {
                 delayBetweenBatches: 0, // No delay needed for single-page processing
                 delayBetweenRequests: CONFIG.batch.delayBetweenRequests, // 500ms delay (original)
                 maxRetries: CONFIG.batch.maxRetries, // 2 attempts total = 1 immediate retry
-                timeoutPerPage: CONFIG.batch.timeoutPerPage // 20s per page (original, fits Netlify 26s limit)
+                timeoutPerPage: CONFIG.batch.timeoutPerPage, // 20s per page (original, fits Netlify 26s limit)
+                forceFallbackOnError: retryMode
             });
             console.log(`[Batch] ✅ Batch processed: ${batchResult.successful.length} successful, ${batchResult.failed.length} failed`);
         } catch (err: any) {
@@ -243,7 +246,7 @@ export async function POST(request: NextRequest) {
             fetch(nextBatchUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jobId })
+                body: JSON.stringify({ jobId, retryMode })
             }).then((res) => {
                 if (res.ok) {
                     console.log(`[Batch] ✅ Next page ${nextBatchNumber} triggered successfully`);
@@ -256,7 +259,7 @@ export async function POST(request: NextRequest) {
                     fetch(nextBatchUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ jobId })
+                        body: JSON.stringify({ jobId, retryMode })
                     }).then((r) => console.log(`[Batch] 🔄 Retry trigger: ${r.ok ? 'ok' : r.status}`)).catch((e: any) => console.error(`[Batch] ❌ Retry trigger failed: ${e.message}`));
                 }, 1000);
             });
@@ -283,7 +286,7 @@ export async function POST(request: NextRequest) {
 
                 const queuedRetry = await enqueueInternalJsonPost(request, {
                     path: '/api/audit/retry',
-                    body: { jobId, retryUrls },
+                    body: { jobId, retryUrls, retryMode: true },
                     label: 'full-site-auto-retry',
                 });
                 console.log(`[Batch] ✅ Auto-retry queued via ${queuedRetry.mode}: ${queuedRetry.url}`);
@@ -401,7 +404,7 @@ export async function POST(request: NextRequest) {
                                 await fetch(nextBatchUrl, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ jobId })
+                                    body: JSON.stringify({ jobId, retryMode })
                                 });
                                 console.log(`[Batch] ✅ Error recovery: Next batch triggered successfully`);
                             } catch (recoveryError: any) {

@@ -143,6 +143,39 @@ export async function launchBrowser() {
 export interface AuditSinglePageOptions {
   captureScreenshot?: boolean;
   lightweightAnalysis?: boolean;
+  forceFallbackOnError?: boolean;
+}
+
+function buildFallbackAuditResult(targetUrl: string, errorMessage: string): AuditResult {
+  const findings: AuditFinding[] = [
+    {
+      category: 'performance',
+      severity: 'medium',
+      issue: 'Partial audit fallback used',
+      description: `This page could not complete full automated analysis in the current serverless run (${errorMessage}).`,
+      location: 'Page-wide',
+      suggestion: 'Retry this page in single-page mode for full diagnostics, or reduce page complexity for serverless full-site audits.',
+    },
+  ];
+
+  return {
+    url: targetUrl,
+    timestamp: new Date().toISOString(),
+    findings,
+    summary: {
+      totalIssues: 1,
+      critical: 0,
+      high: 0,
+      medium: 1,
+      low: 0,
+      accessibility: 0,
+      usability: 0,
+      design: 0,
+      performance: 1,
+      seo: 0,
+      overallScore: 78,
+    },
+  };
 }
 
 export async function auditSinglePage(
@@ -156,6 +189,7 @@ export async function auditSinglePage(
   let page: any = null;
   const shouldCaptureScreenshot = options.captureScreenshot !== false;
   const useLightweightAnalysis = options.lightweightAnalysis === true;
+  const forceFallbackOnError = options.forceFallbackOnError === true;
 
   try {
     // Check if aborted before starting
@@ -988,6 +1022,11 @@ Focus on the most impactful issues. Return ${requestedFindingRange} findings tot
     console.error(`     Error type: ${error.name}`);
     if (error.stack) {
       console.error(`     Stack: ${error.stack.split('\n').slice(0, 5).join('\n')}`);
+    }
+
+    if (forceFallbackOnError) {
+      console.warn(`  ⚠️ Returning fallback audit result for ${url} after error`);
+      return buildFallbackAuditResult(url, error.message || 'Unknown audit failure');
     }
 
     // Re-throw with more context
